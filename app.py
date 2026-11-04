@@ -39,8 +39,15 @@ def m(): return HTMLResponse(open(f"{H}/mobile.html").read())
 def mf(): return FileResponse(f"{H}/manifest.webmanifest",media_type="application/manifest+json")
 @app.get("/icon.png")
 def ic(): return FileResponse(f"{H}/icon.png")
+@app.get("/icon192.png")
+def ic2(): return FileResponse(f"{H}/icon192.png")
+@app.get("/app.apk")
+def apk():
+    p=f"{H}/app.apk"
+    if not os.path.exists(p): raise HTTPException(404,"APK not built yet")
+    return FileResponse(p,media_type="application/vnd.android.package-archive",filename="jarvis-mocap.apk")
 @app.get("/sw.js")
-def sw(): return Response("self.addEventListener('fetch',()=>{});",media_type="application/javascript")
+def sw(): return Response("self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('fetch',e=>{});",headers={"Service-Worker-Allowed":"/"},media_type="application/javascript")
 @app.get("/characters")
 def chars(key:str=""):
     chk(key); return json.load(open(f"{H}/characters.json"))
@@ -70,7 +77,7 @@ def status(j:str,key:str=""):
 def file(j:str,name:str,key:str="",dl:str=""):
     chk(key); p=os.path.join(jd(j),"out",os.path.basename(name))
     if not os.path.exists(p): raise HTTPException(404,"not found")
-    return FileResponse(p,filename=name if dl=="1" else None)
+    return FileResponse(p,filename=name,content_disposition_type="attachment" if dl=="1" else "inline")
 # ---- worker API ----
 @app.get("/w/next")
 def wnext(request:Request):
