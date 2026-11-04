@@ -6,7 +6,7 @@ input,select,button,.btn{display:block;width:100%;box-sizing:border-box;font-siz
 input,select{background:#222;color:#eee}button,.btn{background:#2a7;color:#fff;text-align:center;text-decoration:none;font-weight:bold}
 .sec{background:#346}.err{color:#f66}progress{width:100%;height:24px}video{width:100%;border-radius:12px;background:#000}
 model-viewer{width:100%;height:60vh;background:#000}label{font-size:16px;color:#aaa}</style></head><body>
-<h2>📱 Jarvis Mocap</h2><a href="/?desktop=1" style="color:#6cf">Desktop version</a>
+<h2>📱 Jarvis Mocap</h2><a href="/?desktop=1" style="color:#6cf">Desktop version</a> · <a href="/app.apk" style="color:#6cf">Android app (APK)</a>
 <p style="font-size:15px">Video: 60 fps+, 1080p+ (portrait is fine).</p>
 <label>Access key (remembered)</label><input id=key type=password autocomplete=off>
 <label>Video (record or gallery)</label><input id=video type=file accept="video/*">
@@ -35,9 +35,9 @@ async function poll(j,k,t0){const s=await (await fetch(`/status/${j}?key=${encod
  const u=n=>`/file/${j}/${n}?key=${encodeURIComponent(k)}`;let h='';
  if(s.files.includes('mhr_overlay.mp4'))h+=`<video controls playsinline loop muted src="${u('mhr_overlay.mp4')}"></video>`;
  h+=s.files.map(n=>`<a class="btn sec" href="${u(n)}&dl=1">⬇ ${n}</a>`).join('');
- if(s.files.includes('character.glb'))h+=`<button id=v3d>Show 3D character (large, ~50 MB)</button><div id=mv></div>`;
+ if(s.files.includes('character.glb'))h+=`<button id=v3d>Show 3D character preview</button><div id=mv></div>`;
  $('out').innerHTML=h;
  if($('v3d'))$('v3d').onclick=()=>{$('v3d').remove();const sc=document.createElement('script');sc.type='module';
   sc.src='https://unpkg.com/@google/model-viewer/dist/model-viewer.min.js';document.head.appendChild(sc);
-  $('mv').innerHTML=`<model-viewer src="${u('character.glb')}" camera-controls autoplay touch-action="pan-y"></model-viewer>`;};}
+  $('mv').innerHTML=`<model-viewer src="${u(s.files.includes('preview.glb')?'preview.glb':'character.glb')}" camera-controls autoplay touch-action="pan-y"></model-viewer>`;};}
 </script></body></html>
