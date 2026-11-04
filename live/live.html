@@ -1,0 +1,169 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Scaffold Live Detect</title>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><meta name="theme-color" content="#112233">
+<link rel="icon" href="/icon.png">
+<style>
+body{margin:0;background:#111;color:#eee;font-family:sans-serif;font-size:16px}
+#wrap{position:relative;width:100%;text-align:center;background:#000}
+#cv{max-width:100%;max-height:72vh;display:block;margin:0 auto}
+#bar{padding:8px;display:flex;flex-wrap:wrap;gap:6px}
+button,.btn,label.b{flex:1 1 30%;font-size:16px;padding:12px 6px;border:0;border-radius:10px;background:#2a7;color:#fff;font-weight:bold;text-align:center;text-decoration:none}
+button.sec,label.b{background:#346}button.rec{background:#c33}
+#row{padding:0 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+input[type=range]{flex:1}#msg{padding:6px 10px;color:#fc6;min-height:1.2em}
+#counts{padding:4px 10px;font-size:15px;line-height:1.5}
+#gate{padding:20px}#gate input{width:100%;font-size:20px;padding:14px;box-sizing:border-box;border-radius:10px;border:0;background:#222;color:#eee}
+a{color:#6cf}
+</style></head><body>
+<div id=gate hidden><h2>🏗 Scaffold Live Detect</h2><p>Access key (remembered on this device)</p><input id=key type=password autocomplete=off><button id=kgo style="width:100%;margin-top:12px">Enter</button><p id=kmsg style="color:#f66"></p></div>
+<div id=app hidden>
+<div id=wrap><canvas id=cv width=640 height=360></canvas></div>
+<div id=msg>Loading…</div>
+<div id=bar>
+ <button id=cam>📷 Camera</button>
+ <label class=b>🎞 Test with video<input id=vfile type=file accept="video/*" hidden></label>
+ <button id=snap class=sec>📸 Snapshot</button>
+ <button id=rec class=sec>⏺ Record</button>
+ <button id=csv class=sec>⬇ CSV</button>
+ <button id=reset class=sec>↺ Reset counts</button>
+</div>
+<div id=row><span>Conf <b id=cval>0.25</b></span><input id=conf type=range min=0.05 max=0.9 step=0.05 value=0.25>
+ <label><input id=ends type=checkbox> Tube-end counter</label><label><input id=sizes type=checkbox checked> Sizes</label></div>
+<div id=counts></div>
+<p style="padding:0 10px;font-size:13px;color:#999">Runs fully on this device (onnxruntime-web, <span id=ep>?</span>). Sizes are estimates from the 48.3 mm tube pitch: "≈X m est." = confident, "?" = weak, "≥X m" = stack runs off the frame. <a href="/m">Mocap</a> · <a href="/app.apk">Android app</a></p>
+</div>
+<video id=vid playsinline muted hidden></video>
+<script src="/live/ort/ort.min.js"></script>
+<script>
+const $=i=>document.getElementById(i);
+const NAMES=['tube stack','crate / box pallet','shipping container','scaffold (built)','light tower'];
+const COL={'tube stack':'#ffc800','crate / box pallet':'#ff8c00','shipping container':'#ff3030','scaffold (built)':'#00a0ff','light tower':'#ff00ff'};
+const LENGTHS=[0.5,1,1.5,2,2.5,3,3.5,4,5,6];
+const PARTS=[{"n": "Scaffold tube 48.3x4.0 0.5 m (EN 39)", "l": 0.5}, {"n": "Scaffold tube 48.3x4.0 1.0 m (EN 39)", "l": 1.0}, {"n": "Scaffold tube 48.3x4.0 1.5 m (EN 39)", "l": 1.5}, {"n": "Scaffold tube 48.3x4.0 2.0 m (EN 39)", "l": 2.0}, {"n": "Scaffold tube 48.3x4.0 2.5 m (EN 39)", "l": 2.5}, {"n": "Scaffold tube 48.3x4.0 3.0 m (EN 39)", "l": 3.0}, {"n": "Scaffold tube 48.3x4.0 3.5 m (EN 39)", "l": 3.5}, {"n": "Scaffold tube 48.3x4.0 4.0 m (EN 39)", "l": 4.0}, {"n": "Scaffold tube 48.3x4.0 5.0 m (EN 39)", "l": 5.0}, {"n": "Scaffold tube 48.3x4.0 6.0 m (EN 39)", "l": 6.0}];  // tube/standard parts from parts_lib/catalog.json
+const V='0ed2839c';
+let KEY=localStorage.k||'',det=null,endsS=null,EP='',busy=false,run=false,stream=null;
+let conf=0.25,lastDets=[],lastEnds=[],fpsInf=0,fpsDisp=0,tLastDisp=0,frameNo=0,log=[],rec=null,chunks=[];
+const vid=$('vid'),cv=$('cv'),ctx=cv.getContext('2d');
+const lb=document.createElement('canvas'),lctx=lb.getContext('2d',{willReadFrequently:true});
+const src=document.createElement('canvas'),sctx=src.getContext('2d',{willReadFrequently:true});
+// ---------- gate ----------
+async function check(k){try{const r=await fetch('/live/check?key='+encodeURIComponent(k));return r.ok}catch(e){return false}}
+async function start(){
+ if(KEY&&await check(KEY)){$('gate').hidden=true;$('app').hidden=false;init();return}
+ $('gate').hidden=false;$('key').value=KEY;
+ $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else $('kmsg').textContent='Wrong key'};
+}
+// ---------- models ----------
+async function fetchModel(name,label){
+ const r=await fetch(`/live/models/${name}?key=${encodeURIComponent(KEY)}&v=${V}`);if(!r.ok)throw new Error('model '+r.status);
+ const tot=+r.headers.get('x-raw-size')||0,rd=r.body.getReader(),parts=[];let n=0;
+ for(;;){const {done,value}=await rd.read();if(done)break;parts.push(value);n+=value.length;$('msg').textContent=`Loading ${label}… ${tot?Math.round(n/tot*100)+'%':(n/1e6).toFixed(1)+' MB'}`}
+ const b=new Uint8Array(n);let o=0;for(const p of parts){b.set(p,o);o+=p.length}return b;
+}
+async function makeSession(buf,S=640){
+ ort.env.wasm.wasmPaths='/live/ort/';ort.env.wasm.numThreads=self.crossOriginIsolated?Math.min(4,navigator.hardwareConcurrency||2):1;
+ const force=new URLSearchParams(location.search).get('ep');
+ const eps=force?[force]:(navigator.gpu?['webgpu','wasm']:['wasm']);
+ for(const ep of eps){try{const s=await ort.InferenceSession.create(buf,{executionProviders:[ep],graphOptimizationLevel:'all'});
+   if(ep==='webgpu'){await s.run({images:new ort.Tensor('float32',new Float32Array(3*S*S),[1,3,S,S])}).catch(e=>{throw e})}
+   return [s,ep]}catch(e){console.warn('EP '+ep+' failed',e)}}
+ throw new Error('no execution provider');
+}
+async function init(){
+ try{const [s,ep]=await makeSession(await fetchModel('scaffold_y11n_v3.onnx','detector'));det=s;EP=ep+(ep==='wasm'?(ort.env.wasm.numThreads>1?' SIMD ×'+ort.env.wasm.numThreads+' threads':' SIMD 1 thread'):'');
+  $('ep').textContent=EP;$('msg').textContent='Ready: tap Camera or Test with video ('+EP+')';
+  if(new URLSearchParams(location.search).get('auto')==='1')startCam();}
+ catch(e){$('msg').textContent='Model load failed: '+e.message}
+}
+async function loadEnds(){if(endsS)return;try{endsS=(await makeSession(await fetchModel('tube_end_y11n.onnx','tube-end model'),960))[0];$('msg').textContent='Tube-end counter on (point at the stack end faces)'}catch(e){$('ends').checked=false;$('msg').textContent='Tube-end model failed: '+e.message}}
+// ---------- input ----------
+async function startCam(){
+ stopSrc();try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}});}
+ catch(e){$('msg').textContent='Camera error: '+e.message;return}
+ vid.srcObject=stream;vid.loop=false;await vid.play();go();
+}
+function stopSrc(){run=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}vid.srcObject=null;if(vid.src){URL.revokeObjectURL(vid.src);vid.removeAttribute('src')}}
+$('cam').onclick=startCam;
+$('vfile').onchange=async e=>{const f=e.target.files[0];if(!f)return;stopSrc();vid.src=URL.createObjectURL(f);vid.loop=true;await vid.play().catch(()=>{});go()};
+function go(){if(!det){$('msg').textContent='Model not loaded yet';return}resetTracks();run=true;$('msg').textContent='Running ('+EP+')';requestAnimationFrame(loop)}
+// ---------- preprocessing ----------
+function letterbox(S){lb.width=lb.height=S;const W=vid.videoWidth,H=vid.videoHeight,s=Math.min(S/W,S/H),w=Math.round(W*s),h=Math.round(H*s),dx=(S-w)>>1,dy=(S-h)>>1;
+ lctx.fillStyle='rgb(114,114,114)';lctx.fillRect(0,0,S,S);lctx.drawImage(vid,dx,dy,w,h);
+ const d=lctx.getImageData(0,0,S,S).data,N=S*S,f=new Float32Array(3*N);
+ for(let i=0,j=0;i<N;i++,j+=4){f[i]=d[j]/255;f[i+N]=d[j+1]/255;f[i+2*N]=d[j+2]/255}
+ return {t:new ort.Tensor('float32',f,[1,3,S,S]),s,dx,dy};}
+function iou(a,b){const x1=Math.max(a[0],b[0]),y1=Math.max(a[1],b[1]),x2=Math.min(a[2],b[2]),y2=Math.min(a[3],b[3]);const i=Math.max(0,x2-x1)*Math.max(0,y2-y1);return i/((a[2]-a[0])*(a[3]-a[1])+(b[2]-b[0])*(b[3]-b[1])-i+1e-9)}
+function decode(out,nc,L,thr,lbx,nmsIou,maxDet){const o=out.data,c=[];
+ for(let i=0;i<L;i++){let best=0,bc=0;for(let k=0;k<nc;k++){const v=o[(4+k)*L+i];if(v>best){best=v;bc=k}}
+  if(best<thr)continue;const cx=o[i],cy=o[L+i],w=o[2*L+i],h=o[3*L+i];
+  c.push({cls:bc,conf:best,box:[(cx-w/2-lbx.dx)/lbx.s,(cy-h/2-lbx.dy)/lbx.s,(cx+w/2-lbx.dx)/lbx.s,(cy+h/2-lbx.dy)/lbx.s]})}
+ c.sort((a,b)=>b.conf-a.conf);const keep=[];
+ for(const d of c){if(keep.length>=maxDet)break;if(keep.every(k=>k.cls!==d.cls||iou(k.box,d.box)<nmsIou))keep.push(d)}return keep}
+// ---------- size estimate (port of scaffold_core.estimate_size_v1) ----------
+function estimateSize(box){const W=src.width,H=src.height;let [x1,y1,x2,y2]=box.map(Math.round);x1=Math.max(0,x1);y1=Math.max(0,y1);x2=Math.min(W,x2);y2=Math.min(H,y2);
+ const w=x2-x1,h=y2-y1;if(w<40||h<30)return null;
+ const cx1=Math.floor(w*0.2),cx2=Math.floor(w*0.8),step=Math.max(1,Math.floor((cx2-cx1)/60)),cols=[];for(let x=cx1;x<cx2;x+=step)cols.push(x);
+ const d=sctx.getImageData(x1,y1,w,h).data,n=h,nc=cols.length,P=new Float32Array(n*nc);
+ for(let ci=0;ci<nc;ci++){let m=0;for(let y=0;y<n;y++){const j=(y*w+cols[ci])*4,g=0.299*d[j]+0.587*d[j+1]+0.114*d[j+2];P[y*nc+ci]=g;m+=g}m/=n;for(let y=0;y<n;y++)P[y*nc+ci]-=m}
+ // light vertical blur
+ const maxlag=Math.min(80,Math.floor(n/3));if(maxlag<6)return null;let den=1e-6;for(let i=0;i<P.length;i++)den+=P[i]*P[i];
+ const ac=new Float32Array(maxlag);ac[0]=1;for(let l=1;l<maxlag;l++){let s=0;for(let i=0;i<(n-l)*nc;i++)s+=P[i]*P[i+l*nc];ac[l]=s/den}
+ let lag=0,peak=0;for(let l=4;l<maxlag-1;l++){if(ac[l]>ac[l-1]&&ac[l]>=ac[l+1]&&ac[l]>0.05){lag=l;peak=ac[l];break}}if(!lag)return null;
+ const len=w/(lag/48.3)/1000,snap=LENGTHS.reduce((a,b)=>Math.abs(b-len)<Math.abs(a-len)?b:a),rel=Math.abs(snap-len)/snap;
+ let c=Math.min(1,Math.max(0,peak*1.6))*Math.min(1,Math.max(0,1-rel*2))*(h>w?0.5:1);const clipped=x1<=3||x2>=W-3;if(clipped)c*=0.5;
+ return {len,snap,conf:c,clipped};}
+function matchPart(L){let b=null;for(const p of PARTS){const e=Math.abs(p.l-L);if(!b||e<b.e)b={e,p}}return b?b.p.n:''}
+// ---------- tracking ----------
+let tracks=[],nextId=1;
+function resetTracks(){tracks=[];nextId=1;log=[]}
+$('reset').onclick=()=>{resetTracks();renderCounts()};
+function track(dets,now){for(const t of tracks)t.matched=false;
+ for(const d of dets){let best=0.25,bt=null;for(const t of tracks){if(t.matched||t.cls!==d.cls||now-t.last>1500)continue;const v=iou(t.box,d.box);if(v>best){best=v;bt=t}}
+  if(!bt){bt={id:nextId++,cls:d.cls,hits:0,sizes:[],first:now};tracks.push(bt)}
+  bt.box=d.box;bt.conf=d.conf;bt.last=now;bt.hits++;bt.matched=true;d.t=bt;}
+ tracks=tracks.filter(t=>now-t.last<10000||t.hits>=3);}
+function trackSize(t){if(!t.sizes.length)return null;const s=t.sizes.slice(-15),ls=s.map(x=>x.len).sort((a,b)=>a-b),len=ls[ls.length>>1];
+ const snap=LENGTHS.reduce((a,b)=>Math.abs(b-len)<Math.abs(a-len)?b:a),c=s.reduce((a,x)=>a+x.conf,0)/s.length,clipped=s.filter(x=>x.clipped).length>s.length/2;return {len,snap,conf:c,clipped}}
+function label(t){const n=NAMES[t.cls];if(n!=='tube stack')return `${n} #${t.id}`;const z=$('sizes').checked?trackSize(t):null;
+ if(!z)return `Tubes Ø48 size ? #${t.id}`;
+ if(z.clipped)return `Tubes Ø48 ≥${z.len.toFixed(1)} m (cut off) #${t.id}`;
+ return `Tubes Ø48 ≈${z.snap.toFixed(1)} m ${z.conf>=0.25?'est.':'?'} · ${matchPart(z.snap)} #${t.id}`}
+function counts(){const c={};for(const t of tracks)if(t.hits>=3){const n=NAMES[t.cls];c[n]=(c[n]||0)+1}return c}
+function renderCounts(){const c=counts();$('counts').innerHTML='<b>Unique counts</b> (tracked ≥3 frames): '+(Object.keys(c).length?Object.entries(c).map(([k,v])=>`<span style="color:${COL[k]}">${k}: ${v}</span>`).join(' · '):'none yet')+(lastEnds.length&&$('ends').checked?` · <span style="color:#0f8">tube ends in view: ${lastEnds.length}</span>`:'')}
+// ---------- main loop ----------
+let endsTurn=false;
+async function infer(){busy=true;const t0=performance.now();
+ try{src.width=vid.videoWidth;src.height=vid.videoHeight;sctx.drawImage(vid,0,0);
+  if($('ends').checked&&endsS&&endsTurn){const L=letterbox(960);const r=await endsS.run({images:L.t});lastEnds=decode(r.output0,1,18900,Math.max(0.15,conf-0.1),L,0.5,1000)}
+  else{const L=letterbox(640);const r=await det.run({images:L.t});const now=performance.now();const ds=decode(r.output0,5,8400,conf,L,0.5,100);
+   track(ds,now);frameNo++;
+   for(const d of ds){if(NAMES[d.cls]==='tube stack'&&$('sizes').checked&&(d.t.hits%3===1)){const z=estimateSize(d.box);if(z)d.t.sizes.push(z)}
+    log.push([new Date().toISOString(),frameNo,vid.currentTime.toFixed(2),d.t.id,NAMES[d.cls],d.conf.toFixed(3),...d.box.map(v=>v.toFixed(1)),label(d.t)])}
+   lastDets=ds;const dt=performance.now()-t0;fpsInf=fpsInf?fpsInf*0.85+150/dt:1000/dt;renderCounts()}
+  endsTurn=!endsTurn;}
+ catch(e){$('msg').textContent='Inference error: '+e.message;console.error(e)}busy=false;}
+function draw(){const W=vid.videoWidth,H=vid.videoHeight;if(!W)return;if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H}
+ ctx.drawImage(vid,0,0);const sc=Math.max(1,W/640),fs=Math.round(13*sc);ctx.lineWidth=2*sc;ctx.font=`bold ${fs}px sans-serif`;
+ for(const d of lastDets){const n=NAMES[d.cls],c=COL[n],[x1,y1,x2,y2]=d.box;ctx.strokeStyle=c;ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+  const s=label(d.t)+` ${(d.conf*100)|0}%`,tw=ctx.measureText(s).width;const ty=Math.max(fs+4,y1);ctx.fillStyle=c;ctx.fillRect(x1,ty-fs-4,tw+8,fs+6);ctx.fillStyle='#000';ctx.fillText(s,x1+4,ty-4)}
+ if($('ends').checked){ctx.strokeStyle='#00ff88';ctx.lineWidth=1.5*sc;for(const e of lastEnds){const [x1,y1,x2,y2]=e.box;ctx.beginPath();ctx.arc((x1+x2)/2,(y1+y2)/2,Math.max(2,(x2-x1)/2),0,6.283);ctx.stroke()}}
+ const c=counts(),lines=[`FPS ${fpsDisp.toFixed(0)} display · ${fpsInf.toFixed(1)} detect · ${EP}`,Object.entries(c).map(([k,v])=>`${k}: ${v}`).join('  ')||'counts: –'];
+ if($('ends').checked)lines.push(`tube ends in view: ${lastEnds.length}`);
+ ctx.font=`bold ${fs}px sans-serif`;const bw=Math.max(...lines.map(l=>ctx.measureText(l).width))+12;ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,bw,lines.length*(fs+6)+6);
+ ctx.fillStyle='#fff';lines.forEach((l,i)=>ctx.fillText(l,6,(i+1)*(fs+6)));}
+function loop(t){if(!run)return;if(vid.readyState>=2){draw();const dt=t-tLastDisp;tLastDisp=t;if(dt>0)fpsDisp=fpsDisp?fpsDisp*0.9+100/dt:1000/dt;if(!busy)infer()}requestAnimationFrame(loop)}
+$('conf').oninput=e=>{conf=+e.target.value;$('cval').textContent=conf.toFixed(2)};
+$('ends').onchange=e=>{if(e.target.checked)loadEnds();else lastEnds=[]};
+// ---------- outputs ----------
+function save(blob,name){if(window.JarvisApp&&JarvisApp.save){const r=new FileReader();r.onload=()=>{JarvisApp.save(name,blob.type||'application/octet-stream',r.result.split(',')[1])};r.readAsDataURL(blob);return}
+ const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000)}
+const stamp=()=>new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+$('snap').onclick=()=>cv.toBlob(b=>save(b,`scaffold_${stamp()}.png`),'image/png');
+$('csv').onclick=()=>{const q=s=>`"${String(s).replace(/"/g,'""')}"`;const head='time,frame,video_t,track_id,class,conf,x1,y1,x2,y2,label';
+ const sum=Object.entries(counts()).map(([k,v])=>`# unique ${k},${v}`).join('\n');
+ save(new Blob([sum+'\n'+head+'\n'+log.map(r=>r.map(q).join(',')).join('\n')],{type:'text/csv'}),`scaffold_${stamp()}.csv`)};
+$('rec').onclick=()=>{if(rec){rec.stop();return}const s=cv.captureStream(30);const mt=['video/mp4;codecs=avc1','video/webm;codecs=vp9','video/webm'].find(m=>MediaRecorder.isTypeSupported(m))||'';
+ rec=new MediaRecorder(s,mt?{mimeType:mt,videoBitsPerSecond:4e6}:{});chunks=[];rec.ondataavailable=e=>e.data.size&&chunks.push(e.data);
+ rec.onstop=()=>{const b=new Blob(chunks,{type:rec.mimeType});save(b,`scaffold_${stamp()}.${rec.mimeType.includes('mp4')?'mp4':'webm'}`);rec=null;$('rec').textContent='⏺ Record';$('rec').className='sec'};
+ rec.start(1000);$('rec').textContent='⏹ Stop';$('rec').className='rec'};
+start();
+</script></body></html>

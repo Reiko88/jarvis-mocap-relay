@@ -103,3 +103,25 @@ async def wresult(j:str,name:str,request:Request):
     with open(os.path.join(o,os.path.basename(name)),"wb") as f:
         async for c in request.stream(): f.write(c)
     return {"ok":True}
+# ---- Scaffold live detect (runs on the phone with onnxruntime-web; server only serves static files) ----
+import gzip as _gz
+LIVE=f"{H}/live"; ISO={"Cross-Origin-Opener-Policy":"same-origin","Cross-Origin-Embedder-Policy":"credentialless"}
+LIVE_SIZES=json.load(open(f"{LIVE}/models/sizes.json")) if os.path.exists(f"{LIVE}/models/sizes.json") else {}
+def _gzfile(p,mt,req,cache,extra=None):
+    if not os.path.exists(p): raise HTTPException(404,"not found")
+    h={"Cache-Control":cache,"Vary":"Accept-Encoding","Cross-Origin-Resource-Policy":"same-origin",**(extra or {})}
+    if "gzip" in req.headers.get("accept-encoding",""):
+        h["Content-Encoding"]="gzip"; return FileResponse(p,media_type=mt,headers=h)
+    return Response(_gz.decompress(open(p,"rb").read()),media_type=mt,headers=h)
+@app.get("/live")
+def live(): return HTMLResponse(open(f"{LIVE}/live.html").read(),headers={**ISO,"Cache-Control":"no-cache"})
+@app.get("/live/check")
+def live_check(key:str=""): chk(key); return {"ok":True}
+@app.get("/live/ort/{name}")
+def live_ort(name:str,request:Request):
+    n=os.path.basename(name); mt="application/wasm" if n.endswith(".wasm") else "text/javascript"
+    return _gzfile(f"{LIVE}/ort/{n}.gz",mt,request,"public, max-age=604800",ISO)
+@app.get("/live/models/{name}")
+def live_model(name:str,request:Request,key:str=""):
+    chk(key); n=os.path.basename(name)
+    return _gzfile(f"{LIVE}/models/{n}.gz","application/octet-stream",request,"private, max-age=31536000, immutable",{"X-Raw-Size":str(LIVE_SIZES.get(n,0)),"Access-Control-Expose-Headers":"X-Raw-Size"})
