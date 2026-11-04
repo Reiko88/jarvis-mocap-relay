@@ -63,9 +63,16 @@ async function makeSession(buf,S=640){
  ort.env.wasm.wasmPaths='/live/ort/';ort.env.wasm.numThreads=self.crossOriginIsolated?Math.min(4,navigator.hardwareConcurrency||2):1;
  const force=new URLSearchParams(location.search).get('ep');
  const eps=force?[force]:(navigator.gpu?['webgpu','wasm']:['wasm']);
- for(const ep of eps){try{const s=await ort.InferenceSession.create(buf,{executionProviders:[ep],graphOptimizationLevel:'all'});
-   if(ep==='webgpu'){await s.run({images:new ort.Tensor('float32',new Float32Array(3*S*S),[1,3,S,S])}).catch(e=>{throw e})}
-   return [s,ep]}catch(e){console.warn('EP '+ep+' failed',e)}}
+ const feed=()=>({images:new ort.Tensor('float32',new Float32Array(3*S*S),[1,3,S,S])});
+ const bench=async s=>{await s.run(feed());const t=performance.now();await s.run(feed());return performance.now()-t};
+ let best=null;
+ for(const ep of eps){try{$('msg').textContent='Starting '+ep+'…';const s=await ort.InferenceSession.create(buf,{executionProviders:[ep],graphOptimizationLevel:'all'});
+   if(force||eps.length===1)return [s,ep];
+   const ms=await bench(s);console.log('EP '+ep+' '+ms.toFixed(0)+' ms/frame');
+   if(!best||ms<best.ms){if(best&&best.s.release)best.s.release();best={s,ep,ms}}else if(s.release)s.release();
+   if(ep==='webgpu'&&ms<150)break;   // fast GPU: skip the CPU benchmark
+  }catch(e){console.warn('EP '+ep+' failed',e)}}
+ if(best)return [best.s,best.ep];
  throw new Error('no execution provider');
 }
 async function init(){
