@@ -14,7 +14,7 @@ input[type=range]{flex:1}#msg{padding:6px 10px;color:#fc6;min-height:1.2em}
 #gate{padding:20px}#gate input{width:100%;font-size:20px;padding:14px;box-sizing:border-box;border-radius:10px;border:0;background:#222;color:#eee}
 a{color:#6cf}
 </style></head><body>
-<div id=gate hidden><h2>🏗 Scaffold Live Detect</h2><p>Access key (remembered on this device)</p><input id=key type=password autocapitalize=off autocorrect=off spellcheck=false autocomplete=off><button id=kgo style="width:100%;margin-top:12px">Enter</button><p id=kmsg style="color:#f66"></p></div>
+<div id=gate hidden><h2>🏗 Scaffold Live Detect</h2><p>Access key (remembered on this device)</p><input id=key type=password autocomplete=off><button id=kgo style="width:100%;margin-top:12px">Enter</button><p id=kmsg style="color:#f66"></p></div>
 <div id=app hidden>
 <div id=wrap><canvas id=cv width=640 height=360></canvas></div>
 <div id=msg>Loading…</div>
@@ -27,30 +27,30 @@ a{color:#6cf}
  <button id=reset class=sec>↺ Reset counts</button>
 </div>
 <div id=row><span>Conf <b id=cval>0.25</b></span><input id=conf type=range min=0.05 max=0.9 step=0.05 value=0.25>
- <label><input id=ends type=checkbox> Tube-end counter</label><label><input id=sizes type=checkbox checked> Sizes</label></div>
+ <label><input id=small type=checkbox checked> Small parts</label><label><input id=ends type=checkbox> Tube-end counter</label><label><input id=sizes type=checkbox checked> Sizes</label></div>
 <div id=counts></div>
-<p style="padding:0 10px;font-size:13px;color:#999">Runs fully on this device (onnxruntime-web, <span id=ep>?</span>). Sizes are estimates from the 48.3 mm tube pitch: "≈X m est." = confident, "?" = weak, "≥X m" = stack runs off the frame. <a href="/m">Mocap</a> · <a href="/app.apk">Android app</a></p>
+<p style="padding:0 10px;font-size:13px;color:#999">Runs fully on this device (onnxruntime-web, <span id=ep>?</span>). Small parts (ledger head / coupler / base jack) are counted individually. Tube sizes are estimates from the 48.3 mm tube pitch: "≈X m est." = confident, "?" = weak, "≥X m" = stack runs off the frame. <a href="/m">Mocap</a> · <a href="/app.apk">Android app</a></p>
 </div>
 <video id=vid playsinline muted hidden></video>
 <script src="/live/ort/ort.min.js"></script>
 <script>
 const $=i=>document.getElementById(i);
-const NAMES=['tube stack','crate / box pallet','shipping container','scaffold (built)','light tower'];
-const COL={'tube stack':'#ffc800','crate / box pallet':'#ff8c00','shipping container':'#ff3030','scaffold (built)':'#00a0ff','light tower':'#ff00ff'};
+const NAMES=['tube stack','crate / box pallet','shipping container','scaffold (built)','light tower','ledger head','coupler','base jack'];
+const COL={'tube stack':'#ffc800','crate / box pallet':'#ff8c00','shipping container':'#ff3030','scaffold (built)':'#00a0ff','light tower':'#ff00ff','ledger head':'#7fff00','coupler':'#00ffc8','base jack':'#c0ff3e'};
 const LENGTHS=[0.5,1,1.5,2,2.5,3,3.5,4,5,6];
 const PARTS=[{"n": "Scaffold tube 48.3x4.0 0.5 m (EN 39)", "l": 0.5}, {"n": "Scaffold tube 48.3x4.0 1.0 m (EN 39)", "l": 1.0}, {"n": "Scaffold tube 48.3x4.0 1.5 m (EN 39)", "l": 1.5}, {"n": "Scaffold tube 48.3x4.0 2.0 m (EN 39)", "l": 2.0}, {"n": "Scaffold tube 48.3x4.0 2.5 m (EN 39)", "l": 2.5}, {"n": "Scaffold tube 48.3x4.0 3.0 m (EN 39)", "l": 3.0}, {"n": "Scaffold tube 48.3x4.0 3.5 m (EN 39)", "l": 3.5}, {"n": "Scaffold tube 48.3x4.0 4.0 m (EN 39)", "l": 4.0}, {"n": "Scaffold tube 48.3x4.0 5.0 m (EN 39)", "l": 5.0}, {"n": "Scaffold tube 48.3x4.0 6.0 m (EN 39)", "l": 6.0}];  // tube/standard parts from parts_lib/catalog.json
-const V='0ed2839c';
-let KEY=localStorage.k||'',det=null,endsS=null,EP='',busy=false,run=false,stream=null;
+const V='0ed28d47839c';
+let KEY=localStorage.k||'',det=null,endsS=null,smallS=null,loadingModel=false,lastBig=[],lastSmall=[],turn=0,EP='',busy=false,run=false,stream=null;
 let conf=0.25,lastDets=[],lastEnds=[],fpsInf=0,fpsDisp=0,tLastDisp=0,frameNo=0,log=[],rec=null,chunks=[];
 const vid=$('vid'),cv=$('cv'),ctx=cv.getContext('2d');
 const lb=document.createElement('canvas'),lctx=lb.getContext('2d',{willReadFrequently:true});
 const src=document.createElement('canvas'),sctx=src.getContext('2d',{willReadFrequently:true});
 // ---------- gate ----------
-let NETERR=false;async function check(k){NETERR=false;try{const r=await fetch('/live/check?key='+encodeURIComponent(k),{cache:'no-store'});if(r.status!==403&&!r.ok)NETERR=true;return r.ok}catch(e){NETERR=true;return false}}
+async function check(k){try{const r=await fetch('/live/check?key='+encodeURIComponent(k));return r.ok}catch(e){return false}}
 async function start(){
  if(KEY&&await check(KEY)){$('gate').hidden=true;$('app').hidden=false;init();return}
- if(KEY&&!NETERR){localStorage.removeItem('k');KEY=''}$('gate').hidden=false;$('key').value='';
- $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else if(NETERR){$('kmsg').textContent='Server not reachable (it may be waking up, wait 1 min and retry)'}else{localStorage.removeItem('k');$('kmsg').textContent='Wrong key (check capitals / spaces)'}};
+ $('gate').hidden=false;$('key').value=KEY;
+ $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else $('kmsg').textContent='Wrong key'};
 }
 // ---------- models ----------
 async function fetchModel(name,label){
@@ -59,7 +59,8 @@ async function fetchModel(name,label){
  for(;;){const {done,value}=await rd.read();if(done)break;parts.push(value);n+=value.length;$('msg').textContent=`Loading ${label}… ${tot?Math.round(n/tot*100)+'%':(n/1e6).toFixed(1)+' MB'}`}
  const b=new Uint8Array(n);let o=0;for(const p of parts){b.set(p,o);o+=p.length}return b;
 }
-async function makeSession(buf,S=640){
+async function makeSession(buf,S=640){loadingModel=true;while(busy)await new Promise(r=>setTimeout(r,20));try{return await makeSession_(buf,S)}finally{loadingModel=false}}
+async function makeSession_(buf,S=640){
  ort.env.wasm.wasmPaths='/live/ort/';ort.env.wasm.numThreads=self.crossOriginIsolated?Math.min(4,navigator.hardwareConcurrency||2):1;
  const force=new URLSearchParams(location.search).get('ep');
  const eps=force?[force]:(navigator.gpu?['webgpu','wasm']:['wasm']);
@@ -77,10 +78,12 @@ async function makeSession(buf,S=640){
 }
 async function init(){
  try{const [s,ep]=await makeSession(await fetchModel('scaffold_y11n_v3.onnx','detector'));det=s;EP=ep+(ep==='wasm'?(ort.env.wasm.numThreads>1?' SIMD ×'+ort.env.wasm.numThreads+' threads':' SIMD 1 thread'):'');
+  if($('small').checked)await loadSmall();
   $('ep').textContent=EP;$('msg').textContent='Ready: tap Camera or Test with video ('+EP+')';
   if(new URLSearchParams(location.search).get('auto')==='1')startCam();}
  catch(e){$('msg').textContent='Model load failed: '+e.message}
 }
+async function loadSmall(){if(smallS)return;try{smallS=(await makeSession(await fetchModel('scaffold_small_y11n_v4.onnx','small-part model')))[0];$('msg').textContent='Small-part model on ('+EP+')'}catch(e){$('small').checked=false;$('msg').textContent='Small-part model failed: '+e.message}}
 async function loadEnds(){if(endsS)return;try{endsS=(await makeSession(await fetchModel('tube_end_y11n.onnx','tube-end model'),960))[0];$('msg').textContent='Tube-end counter on (point at the stack end faces)'}catch(e){$('ends').checked=false;$('msg').textContent='Tube-end model failed: '+e.message}}
 // ---------- input ----------
 async function startCam(){
@@ -124,7 +127,7 @@ let tracks=[],nextId=1;
 function resetTracks(){tracks=[];nextId=1;log=[]}
 $('reset').onclick=()=>{resetTracks();renderCounts()};
 function track(dets,now){for(const t of tracks)t.matched=false;
- for(const d of dets){let best=0.25,bt=null;for(const t of tracks){if(t.matched||t.cls!==d.cls||now-t.last>1500)continue;const v=iou(t.box,d.box);if(v>best){best=v;bt=t}}
+ for(const d of dets){let best=0.25,bt=null;for(const t of tracks){if(t.matched||t.cls!==d.cls||now-t.last>2500)continue;const v=iou(t.box,d.box);if(v>best){best=v;bt=t}}
   if(!bt){bt={id:nextId++,cls:d.cls,hits:0,sizes:[],first:now};tracks.push(bt)}
   bt.box=d.box;bt.conf=d.conf;bt.last=now;bt.hits++;bt.matched=true;d.t=bt;}
  tracks=tracks.filter(t=>now-t.last<10000||t.hits>=3);}
@@ -137,16 +140,24 @@ function label(t){const n=NAMES[t.cls];if(n!=='tube stack')return `${n} #${t.id}
 function counts(){const c={};for(const t of tracks)if(t.hits>=3){const n=NAMES[t.cls];c[n]=(c[n]||0)+1}return c}
 function renderCounts(){const c=counts();$('counts').innerHTML='<b>Unique counts</b> (tracked ≥3 frames): '+(Object.keys(c).length?Object.entries(c).map(([k,v])=>`<span style="color:${COL[k]}">${k}: ${v}</span>`).join(' · '):'none yet')+(lastEnds.length&&$('ends').checked?` · <span style="color:#0f8">tube ends in view: ${lastEnds.length}</span>`:'')}
 // ---------- main loop ----------
-let endsTurn=false;
+// models take turns: main detector, small-part detector, tube-end counter (each enabled one gets an equal share)
+const SMALL_OFF=5,SMALL_NC=3;
+function insideCount(b,sm){let n=0;for(const s of sm){const cx=(s.box[0]+s.box[2])/2,cy=(s.box[1]+s.box[3])/2;if(cx>=b[0]&&cx<=b[2]&&cy>=b[1]&&cy<=b[3])n++}return n}
+// a "tube stack"/"scaffold" box sitting on a heap of small parts is the crate of parts, not tubes
+function suppressBig(big,sm){return sm.length<3?big:big.filter(d=>!((NAMES[d.cls]==='tube stack'||NAMES[d.cls]==='scaffold (built)')&&insideCount(d.box,sm)>=3))}
 async function infer(){busy=true;const t0=performance.now();
  try{src.width=vid.videoWidth;src.height=vid.videoHeight;sctx.drawImage(vid,0,0);
-  if($('ends').checked&&endsS&&endsTurn){const L=letterbox(960);const r=await endsS.run({images:L.t});lastEnds=decode(r.output0,1,18900,Math.max(0.15,conf-0.1),L,0.5,1000)}
-  else{const L=letterbox(640);const r=await det.run({images:L.t});const now=performance.now();const ds=decode(r.output0,5,8400,conf,L,0.5,100);
-   track(ds,now);frameNo++;
+  const seq=['det'];if($('small').checked&&smallS)seq.push('small');if($('ends').checked&&endsS)seq.push('ends');const which=seq[turn++%seq.length];
+  if(which==='ends'){const L=letterbox(960);const r=await endsS.run({images:L.t});lastEnds=decode(r.output0,1,18900,Math.max(0.15,conf-0.1),L,0.5,1000)}
+  else{const L=letterbox(640);let ds;
+   if(which==='small'){const r=await smallS.run({images:L.t});ds=decode(r.output0,SMALL_NC,8400,Math.min(0.9,conf+0.1),L,0.5,300);for(const d of ds)d.cls+=SMALL_OFF}
+   else{const r=await det.run({images:L.t});ds=suppressBig(decode(r.output0,5,8400,conf,L,0.5,100),$('small').checked?lastSmall:[])}
+   const now=performance.now();track(ds,now);frameNo++;
    for(const d of ds){if(NAMES[d.cls]==='tube stack'&&$('sizes').checked&&(d.t.hits%3===1)){const z=estimateSize(d.box);if(z)d.t.sizes.push(z)}
     log.push([new Date().toISOString(),frameNo,vid.currentTime.toFixed(2),d.t.id,NAMES[d.cls],d.conf.toFixed(3),...d.box.map(v=>v.toFixed(1)),label(d.t)])}
-   lastDets=ds;const dt=performance.now()-t0;fpsInf=fpsInf?fpsInf*0.85+150/dt:1000/dt;renderCounts()}
-  endsTurn=!endsTurn;}
+   if(which==='small'){lastSmall=ds;lastBig=suppressBig(lastBig,ds)}else lastBig=ds;
+   if(!$('small').checked)lastSmall=[];
+   lastDets=lastBig.concat(lastSmall);const dt=performance.now()-t0;fpsInf=fpsInf?fpsInf*0.85+150/dt:1000/dt;renderCounts()}}
  catch(e){$('msg').textContent='Inference error: '+e.message;console.error(e)}busy=false;}
 function draw(){const W=vid.videoWidth,H=vid.videoHeight;if(!W)return;if(cv.width!==W||cv.height!==H){cv.width=W;cv.height=H}
  ctx.drawImage(vid,0,0);const sc=Math.max(1,W/640),fs=Math.round(13*sc);ctx.lineWidth=2*sc;ctx.font=`bold ${fs}px sans-serif`;
@@ -157,9 +168,10 @@ function draw(){const W=vid.videoWidth,H=vid.videoHeight;if(!W)return;if(cv.widt
  if($('ends').checked)lines.push(`tube ends in view: ${lastEnds.length}`);
  ctx.font=`bold ${fs}px sans-serif`;const bw=Math.max(...lines.map(l=>ctx.measureText(l).width))+12;ctx.fillStyle='rgba(0,0,0,.6)';ctx.fillRect(0,0,bw,lines.length*(fs+6)+6);
  ctx.fillStyle='#fff';lines.forEach((l,i)=>ctx.fillText(l,6,(i+1)*(fs+6)));}
-function loop(t){if(!run)return;if(vid.readyState>=2){draw();const dt=t-tLastDisp;tLastDisp=t;if(dt>0)fpsDisp=fpsDisp?fpsDisp*0.9+100/dt:1000/dt;if(!busy)infer()}requestAnimationFrame(loop)}
+function loop(t){if(!run)return;if(vid.readyState>=2){draw();const dt=t-tLastDisp;tLastDisp=t;if(dt>0)fpsDisp=fpsDisp?fpsDisp*0.9+100/dt:1000/dt;if(!busy&&!loadingModel)infer()}requestAnimationFrame(loop)}
 $('conf').oninput=e=>{conf=+e.target.value;$('cval').textContent=conf.toFixed(2)};
 $('ends').onchange=e=>{if(e.target.checked)loadEnds();else lastEnds=[]};
+$('small').onchange=e=>{if(e.target.checked)loadSmall();else{lastSmall=[];lastDets=lastBig.slice()}};
 // ---------- outputs ----------
 function save(blob,name){if(window.JarvisApp&&JarvisApp.save){const r=new FileReader();r.onload=()=>{JarvisApp.save(name,blob.type||'application/octet-stream',r.result.split(',')[1])};r.readAsDataURL(blob);return}
  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},2000)}
