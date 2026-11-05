@@ -9,7 +9,7 @@ model-viewer{width:100%;height:60vh;background:#000}label{font-size:16px;color:#
 <h2>📱 Jarvis Mocap</h2><a href="/?desktop=1" style="color:#6cf">Desktop version</a> · <a href="/app.apk" style="color:#6cf">Android app (APK)</a>
 <a class="btn" href="/live" style="background:#c80">🏗 Live detect (scaffold parts, camera)</a>
 <p style="font-size:15px">Video: 60 fps+, 1080p+ (portrait is fine).</p>
-<label>Access key (remembered)</label><input id=key type=password autocomplete=off>
+<label>Access key (remembered)</label><input id=key type=password autocapitalize=off autocorrect=off spellcheck=false autocomplete=off>
 <label>Video (record or gallery)</label><input id=video type=file accept="video/*">
 <label>Character</label><select id=char><option value=none>None (skeleton plus MHR mesh only)</option></select>
 <details><summary style="font-size:16px">Use my own rigged character</summary><input id=cfile type=file accept=".fbx,.glb,.gltf,.blend"></details>
@@ -18,10 +18,10 @@ model-viewer{width:100%;height:60vh;background:#000}label{font-size:16px;color:#
 <script>
 const $=i=>document.getElementById(i);$('key').value=localStorage.k||'';
 if('serviceWorker' in navigator)navigator.serviceWorker.register('/sw.js');
-async function loadChars(){const k=$('key').value;if(!k)return;const r=await fetch('/characters?key='+encodeURIComponent(k));if(!r.ok)return;
+async function loadChars(){const k=$('key').value.trim();if(!k)return;const r=await fetch('/characters?key='+encodeURIComponent(k));if(!r.ok){if(r.status==403)localStorage.removeItem('k');return}
  const s=$('char');s.innerHTML='';(await r.json()).forEach(c=>s.add(new Option(c.name,c.id)));}
-$('key').onchange=()=>{localStorage.k=$('key').value;loadChars()};loadChars();
-$('go').onclick=()=>{const k=$('key').value,f=$('video').files[0];if(!f){$('msg').textContent='Pick a video';return}
+$('key').onchange=()=>{localStorage.k=$('key').value.trim();loadChars()};loadChars();
+$('go').onclick=()=>{const k=$('key').value.trim(),f=$('video').files[0];if(!f){$('msg').textContent='Pick a video';return}
  localStorage.k=k;const fd=new FormData();fd.append('key',k);fd.append('video',f);fd.append('character',$('char').value);
  if($('cfile').files[0])fd.append('character_file',$('cfile').files[0]);
  $('out').innerHTML='';$('msg').className='';$('prog').hidden=false;$('go').disabled=true;

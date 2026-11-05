@@ -1,11 +1,11 @@
 import os,json,uuid,time,secrets,shutil,subprocess
 from fastapi import FastAPI,Request,UploadFile,File,Form,HTTPException
 from fastapi.responses import HTMLResponse,FileResponse,JSONResponse,RedirectResponse,Response
-KEY=os.environ.get("ACCESS_KEY",""); WT=os.environ.get("WORKER_TOKEN","")
+KEY=os.environ.get("ACCESS_KEY","").strip(); WT=os.environ.get("WORKER_TOKEN","")
 J="/tmp/jobs"; os.makedirs(J,exist_ok=True); H=os.path.dirname(os.path.abspath(__file__))
 app=FastAPI(); LAST={"seen":0}
 def chk(k):
-    if not KEY or not secrets.compare_digest(k or "",KEY): raise HTTPException(403,"Wrong or missing access key")
+    if not KEY or not secrets.compare_digest((k or "").strip(),KEY): raise HTTPException(403,"Wrong or missing access key")
 def wchk(r:Request):
     if not WT or not secrets.compare_digest(r.headers.get("X-Worker",""),WT): raise HTTPException(403)
 def jd(j): return os.path.join(J,os.path.basename(j))

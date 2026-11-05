@@ -14,7 +14,7 @@ input[type=range]{flex:1}#msg{padding:6px 10px;color:#fc6;min-height:1.2em}
 #gate{padding:20px}#gate input{width:100%;font-size:20px;padding:14px;box-sizing:border-box;border-radius:10px;border:0;background:#222;color:#eee}
 a{color:#6cf}
 </style></head><body>
-<div id=gate hidden><h2>🏗 Scaffold Live Detect</h2><p>Access key (remembered on this device)</p><input id=key type=password autocomplete=off><button id=kgo style="width:100%;margin-top:12px">Enter</button><p id=kmsg style="color:#f66"></p></div>
+<div id=gate hidden><h2>🏗 Scaffold Live Detect</h2><p>Access key (remembered on this device)</p><input id=key type=password autocapitalize=off autocorrect=off spellcheck=false autocomplete=off><button id=kgo style="width:100%;margin-top:12px">Enter</button><p id=kmsg style="color:#f66"></p></div>
 <div id=app hidden>
 <div id=wrap><canvas id=cv width=640 height=360></canvas></div>
 <div id=msg>Loading…</div>
@@ -49,8 +49,8 @@ const src=document.createElement('canvas'),sctx=src.getContext('2d',{willReadFre
 async function check(k){try{const r=await fetch('/live/check?key='+encodeURIComponent(k));return r.ok}catch(e){return false}}
 async function start(){
  if(KEY&&await check(KEY)){$('gate').hidden=true;$('app').hidden=false;init();return}
- $('gate').hidden=false;$('key').value=KEY;
- $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else $('kmsg').textContent='Wrong key'};
+ if(KEY){localStorage.removeItem('k');KEY=''}$('gate').hidden=false;$('key').value='';
+ $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else{localStorage.removeItem('k');$('kmsg').textContent='Wrong key (check capitals / spaces)'}};
 }
 // ---------- models ----------
 async function fetchModel(name,label){

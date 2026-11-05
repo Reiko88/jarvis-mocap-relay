@@ -5,7 +5,7 @@
 .err{color:#f66}a{color:#6cf}video,model-viewer{width:100%;max-height:460px;background:#000;margin-top:1em}model-viewer{height:460px}</style></head><body>
 <h2>Jarvis body mocap (InstantHMR)</h2><p><a href="/m">📱 Mobile version</a> · <a href="/app.apk">Android app (APK)</a> · <a href="/live">🏗 Scaffold live detect (phone camera)</a></p>
 <p>Video must be <b>60 fps or more</b> and <b>1080p or higher</b>.</p>
-<label>Access key <input id=key type=password size=30></label><br>
+<label>Access key <input id=key type=password autocapitalize=off autocorrect=off spellcheck=false size=30></label><br>
 <label>Video <input id=video type=file accept="video/*"></label><br>
 <label>Character <select id=char><option value=none>None (skeleton plus MHR mesh only)</option></select></label><br>
 <label>…or upload your own rigged character (.fbx/.glb/.blend, UE5 Manny bone names) <input id=cfile type=file accept=".fbx,.glb,.gltf,.blend"></label><br>
@@ -13,10 +13,10 @@
 <p id=msg></p><div id=out></div>
 <script>
 const $=i=>document.getElementById(i);$('key').value=localStorage.k||'';
-async function loadChars(){const k=$('key').value;if(!k)return;const r=await fetch('/characters?key='+encodeURIComponent(k));if(!r.ok)return;
+async function loadChars(){const k=$('key').value.trim();if(!k)return;const r=await fetch('/characters?key='+encodeURIComponent(k));if(!r.ok){if(r.status==403)localStorage.removeItem('k');return}
  const s=$('char');s.innerHTML='';(await r.json()).forEach(c=>s.add(new Option(c.name,c.id)));}
-$('key').onchange=()=>{localStorage.k=$('key').value;loadChars()};loadChars();
-$('go').onclick=async()=>{const k=$('key').value,f=$('video').files[0];if(!f){$('msg').textContent='Pick a video';return}
+$('key').onchange=()=>{localStorage.k=$('key').value.trim();loadChars()};loadChars();
+$('go').onclick=async()=>{const k=$('key').value.trim(),f=$('video').files[0];if(!f){$('msg').textContent='Pick a video';return}
  const fd=new FormData();fd.append('key',k);fd.append('video',f);fd.append('character',$('char').value);if($('cfile').files[0])fd.append('character_file',$('cfile').files[0]);
  $('msg').className='';$('msg').textContent='Uploading and checking video...';$('out').innerHTML='';
  const r=await fetch('/upload',{method:'POST',body:fd});const d=await r.json();
