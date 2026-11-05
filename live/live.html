@@ -46,11 +46,11 @@ const vid=$('vid'),cv=$('cv'),ctx=cv.getContext('2d');
 const lb=document.createElement('canvas'),lctx=lb.getContext('2d',{willReadFrequently:true});
 const src=document.createElement('canvas'),sctx=src.getContext('2d',{willReadFrequently:true});
 // ---------- gate ----------
-async function check(k){try{const r=await fetch('/live/check?key='+encodeURIComponent(k));return r.ok}catch(e){return false}}
+let NETERR=false;async function check(k){NETERR=false;try{const r=await fetch('/live/check?key='+encodeURIComponent(k),{cache:'no-store'});if(r.status!==403&&!r.ok)NETERR=true;return r.ok}catch(e){NETERR=true;return false}}
 async function start(){
  if(KEY&&await check(KEY)){$('gate').hidden=true;$('app').hidden=false;init();return}
- if(KEY){localStorage.removeItem('k');KEY=''}$('gate').hidden=false;$('key').value='';
- $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else{localStorage.removeItem('k');$('kmsg').textContent='Wrong key (check capitals / spaces)'}};
+ if(KEY&&!NETERR){localStorage.removeItem('k');KEY=''}$('gate').hidden=false;$('key').value='';
+ $('kgo').onclick=async()=>{const k=$('key').value.trim();if(await check(k)){KEY=k;localStorage.k=k;$('gate').hidden=true;$('app').hidden=false;init()}else if(NETERR){$('kmsg').textContent='Server not reachable (it may be waking up, wait 1 min and retry)'}else{localStorage.removeItem('k');$('kmsg').textContent='Wrong key (check capitals / spaces)'}};
 }
 // ---------- models ----------
 async function fetchModel(name,label){

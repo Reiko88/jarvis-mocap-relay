@@ -4,8 +4,37 @@ from fastapi.responses import HTMLResponse,FileResponse,JSONResponse,RedirectRes
 KEY=os.environ.get("ACCESS_KEY","").strip(); WT=os.environ.get("WORKER_TOKEN","")
 J="/tmp/jobs"; os.makedirs(J,exist_ok=True); H=os.path.dirname(os.path.abspath(__file__))
 app=FastAPI(); LAST={"seen":0}
+import hmac,hashlib
+def _sig(exp): return hmac.new(("sess:"+KEY).encode(),str(exp).encode(),hashlib.sha256).hexdigest()[:32]
+def mk_sess(days=30): exp=int(time.time())+days*86400; return f"s.{exp}.{_sig(exp)}"
+def sess_ok(k):
+    try:
+        _,exp,sg=k.split("."); return int(exp)>time.time() and secrets.compare_digest(sg,_sig(int(exp)))
+    except Exception: return False
 def chk(k):
-    if not KEY or not secrets.compare_digest((k or "").strip(),KEY): raise HTTPException(403,"Wrong or missing access key")
+    k=(k or "").strip()
+    if not KEY: raise HTTPException(403,"Wrong or missing access key")
+    if k.startswith("s.") and sess_ok(k): return
+    if not secrets.compare_digest(k,KEY): raise HTTPException(403,"Wrong or missing access key")
+MAGIC={}
+@app.post("/auth/magic")
+def auth_magic(r:Request):
+    chk(r.headers.get("X-Key",""))
+    if KEY!=(r.headers.get("X-Key","").strip()): raise HTTPException(403,"Real key required")
+    now=time.time()
+    for t in [t for t,v in MAGIC.items() if v["exp"]<now]: MAGIC.pop(t,None)
+    t=secrets.token_urlsafe(24); MAGIC[t]={"exp":now+900,"used":False}; return {"token":t,"expires":int(now+900)}
+@app.get("/go/{token}")
+def go(token:str,to:str="/live"):
+    if not to.startswith("/") or to.startswith("//"): to="/live"
+    m=MAGIC.get(token)
+    msg=None
+    if not m: msg="This sign-in link is invalid (or the server restarted). Ask for a new link."
+    elif m["used"]: msg="This sign-in link was already used. Ask for a new link."
+    elif m["exp"]<time.time(): msg="This sign-in link has expired. Ask for a new link."
+    if msg: return HTMLResponse(f"<!doctype html><meta name=viewport content='width=device-width'><body style='font-family:sans-serif;background:#111;color:#eee;padding:24px'><h2>Sign-in link not valid</h2><p>{msg}</p></body>",status_code=410,headers={"Cache-Control":"no-store"})
+    m["used"]=True; s=mk_sess()
+    return HTMLResponse(f"<!doctype html><meta name=viewport content='width=device-width'><body style='font-family:sans-serif;background:#111;color:#eee;padding:24px'><p>Signing in…</p><script>localStorage.k={json.dumps(s)};location.replace({json.dumps(to)})</script>",headers={"Cache-Control":"no-store","Referrer-Policy":"no-referrer"})
 def wchk(r:Request):
     if not WT or not secrets.compare_digest(r.headers.get("X-Worker",""),WT): raise HTTPException(403)
 def jd(j): return os.path.join(J,os.path.basename(j))
@@ -32,9 +61,9 @@ def health(): return {"ok":True,"worker_seen_s_ago":round(time.time()-LAST["seen
 def index(request:Request,desktop:str=""):
     ua=request.headers.get("user-agent","")
     if desktop!="1" and any(t in ua for t in ("Android","Mobile","iPhone")): return RedirectResponse("/m",302)
-    return HTMLResponse(open(f"{H}/index.html").read())
+    return HTMLResponse(open(f"{H}/index.html").read(),headers={"Cache-Control":"no-cache"})
 @app.get("/m")
-def m(): return HTMLResponse(open(f"{H}/mobile.html").read())
+def m(): return HTMLResponse(open(f"{H}/mobile.html").read(),headers={"Cache-Control":"no-cache"})
 @app.get("/manifest.webmanifest")
 def mf(): return FileResponse(f"{H}/manifest.webmanifest",media_type="application/manifest+json")
 @app.get("/icon.png")
@@ -47,7 +76,7 @@ def apk():
     if not os.path.exists(p): raise HTTPException(404,"APK not built yet")
     return FileResponse(p,media_type="application/vnd.android.package-archive",filename="jarvis-mocap.apk")
 @app.get("/sw.js")
-def sw(): return Response("self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('fetch',e=>{});",headers={"Service-Worker-Allowed":"/"},media_type="application/javascript")
+def sw(): return Response("const V='v3';self.addEventListener('install',e=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(caches.keys().then(ks=>Promise.all(ks.map(k=>caches.delete(k)))).then(()=>self.clients.claim())));",headers={"Service-Worker-Allowed":"/","Cache-Control":"no-cache"},media_type="application/javascript")
 @app.get("/characters")
 def chars(key:str=""):
     chk(key); return json.load(open(f"{H}/characters.json"))
